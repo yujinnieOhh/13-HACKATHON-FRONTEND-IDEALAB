@@ -8,7 +8,10 @@ import { ENDPOINTS } from "@/lib/endpoints";
 function LoginForm() {
   const router = useRouter();
   const sp = useSearchParams();
-  const next = sp.get("next") || "/ws/p1";
+
+  // ✅ 기본 리다이렉트 경로를 /ws 로 변경
+  const rawNext = sp.get("next");
+  const next = rawNext && rawNext.startsWith("/") ? rawNext : "/ws";
 
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
@@ -24,7 +27,7 @@ function LoginForm() {
       const r = await fetch(ENDPOINTS.login, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // 세션/쿠키 기반이면 ↓ 주석 해제 (그리고 서버 CORS/credentials 설정 필수)
+        // 세션/쿠키 기반이라면 주석 해제 (백엔드 CORS/credentials 설정 필요)
         // credentials: "include",
         body: JSON.stringify({ email, password: pw }),
       });
@@ -42,10 +45,11 @@ function LoginForm() {
         return;
       }
 
-      // JWT 토큰 내려주는 백엔드라면 저장 (키 이름에 맞춰서)
+      // JWT 토큰을 내려주는 백엔드라면 저장
       const access = j?.access || j?.token;
       if (access) localStorage.setItem("access_token", access);
 
+      // ✅ 성공 시 워크스페이스 홈(/ws) 또는 ?next= 로 이동
       router.replace(next);
     } catch {
       setErr("네트워크 오류");

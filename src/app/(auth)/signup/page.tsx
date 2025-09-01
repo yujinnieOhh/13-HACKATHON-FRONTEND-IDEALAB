@@ -1,27 +1,27 @@
-// src/app/(auth)/signup/page.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ENDPOINTS } from "@/lib/endpoints";
 
-type MaybeError = {
-  message?: string;
-  detail?: string;
-  errors?: Record<string, string[]>;
-  non_field_errors?: string[];
-};
+type ServerError =
+  | { message?: string; detail?: string; non_field_errors?: string[] }
+  | Record<string, string[]>
+  | string
+  | null
+  | undefined;
 
-function pickErrorMessage(j: any & MaybeError, fallback: string) {
-  // 다양한 백엔드 에러 포맷을 최대한 커버
-  if (j?.message) return j.message;
-  if (j?.detail) return j.detail;
-  if (Array.isArray(j?.non_field_errors) && j.non_field_errors[0]) return j.non_field_errors[0];
-  if (j?.errors) {
-    const firstKey = Object.keys(j.errors)[0];
-    if (firstKey && Array.isArray(j.errors[firstKey]) && j.errors[firstKey][0]) {
-      return `${firstKey}: ${j.errors[firstKey][0]}`;
-    }
+function pickErrorMessage(e: ServerError, fallback: string) {
+  if (!e) return fallback;
+  if (typeof e === "string") return e;
+  if (e.message) return e.message;
+  if (e.detail) return e.detail;
+  if (Array.isArray(e.non_field_errors) && e.non_field_errors[0]) {
+    return e.non_field_errors[0];
+  }
+  const k = Object.keys(e)[0];
+  if (k && Array.isArray((e as any)[k]) && (e as any)[k][0]) {
+    return `${k}: ${(e as any)[k][0]}`;
   }
   return fallback;
 }
@@ -29,73 +29,69 @@ function pickErrorMessage(j: any & MaybeError, fallback: string) {
 export default function SignupPage() {
   const router = useRouter();
 
+  // form state
   const [name, setName] = useState("");
   const [nickname, setNickname] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
 
+  // ui state
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // 최소 유효성 검사 (클라이언트)
+  // client validations
   const emailValid = useMemo(() => /\S+@\S+\.\S+/.test(email), [email]);
-  const pwStrong = useMemo(() => pw.length >= 6, [pw]);
-  const canSubmit = emailValid && pwStrong && pw === pw2 && !!name && !!nickname && !loading;
+  const pwStrong = useMemo(() => pw.length >= 8, [pw]); // 8자 권장
+  const samePw = pw === pw2;
+  const canSubmit =
+    emailValid && pwStrong && samePw && !!name && !!nickname && !loading;
 
-  const submit = async (e: React.FormEvent) => {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr("");
 
-    if (pw !== pw2) {
+    if (!samePw) {
       setErr("비밀번호가 일치하지 않습니다.");
       return;
     }
 
     setLoading(true);
     try {
-      // 다양한 백엔드 호환을 위해 몇 개 필드를 함께 전송
-      // - password_confirm: 일부 서버 필수
-      // - username: Django류에서 username 필드가 필요한 경우 nickname으로 대체
-      // - name/full_name: 네가 쓰는 'name' 그대로 + 보조 키도 같이 보냄
-      const payload = {
-        name,
-        full_name: name,
-        nickname,
-        username: nickname,
-        email,
-        password: pw,
-        password_confirm: pw2,
-      };
+      // 서버가 기대하는 4개 필드만 전송
+      const payload = { email, password: pw, name, nickname };
 
-      const r = await fetch(ENDPOINTS.signup, {
+      const res = await fetch(ENDPOINTS.signup, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        // 세션/쿠키 인증이라면 ↓ 주석 해제 + 서버 CORS 설정 필요
+        headers: { "Content-Type": "application/json" },
+        // 세션/쿠키 인증이면 ↓ 주석 해제 + CORS/CSRF 세팅 필요
         // credentials: "include",
         body: JSON.stringify(payload),
       });
 
-      const j = await r.json().catch(() => ({} as any));
+      // 응답이 JSON이 아닐 수도 있어 방어적으로 처리
+      const raw = await res.text();
+      let data: any = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        // JSON이 아니면 그대로 보여주기 위해 둠
+      }
 
-      if (!r.ok) {
-        const msg = pickErrorMessage(j, `회원가입 실패 (HTTP ${r.status})`);
-        setErr(msg);
+      if (!res.ok) {
+        console.log("Signup error:", res.status, raw); // 원문 확인
+        setErr(pickErrorMessage(data, `회원가입 실패 (HTTP ${res.status})`));
         return;
       }
 
-      // 서버가 바로 토큰을 내려주는 경우 저장 (키 이름에 맞춰서)
-      const access = j?.access || j?.token;
-      if (access) localStorage.setItem("access_token", access);
-
-      // 일반적으로는 가입 후 로그인 페이지로
+      // 성공 시 로그인 페이지로
       router.replace("/login");
-    } catch {
+    } catch (e) {
       setErr("네트워크 오류");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <div className="min-h-dvh flex items-center justify-center">
@@ -132,11 +128,11 @@ export default function SignupPage() {
           <input
             type="password"
             className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="비밀번호 (6자 이상)"
+            placeholder="비밀번호 (8자 이상)"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             required
-            minLength={6}
+            minLength={8}
           />
 
           <input
@@ -146,13 +142,14 @@ export default function SignupPage() {
             value={pw2}
             onChange={(e) => setPw2(e.target.value)}
             required
-            minLength={6}
+            minLength={8}
           />
 
           {err && <p className="text-sm text-red-600">{err}</p>}
 
           <label className="flex items-center text-sm text-neutral-700">
-            <input type="checkbox" required className="mr-2" /> 개인정보 수집 및 이용에 동의합니다.
+            <input type="checkbox" required className="mr-2" /> 개인정보 수집 및
+            이용에 동의합니다.
           </label>
 
           <button

@@ -38,7 +38,7 @@ if (!API_URL) {
 /** 5) 엔드포인트 */
 export const ENDPOINTS = {
   login: `${API_URL}/api/user/login/`,
-    signup: `${API_URL}/api/user/signup/`,
+  signup: `${API_URL}/api/user/signup/`,
 
   meetings: {
     list: `${API_URL}/api/meetings/`,
@@ -50,7 +50,7 @@ export const ENDPOINTS = {
     stt: {
       chunk: (id: string | number) => `${API_URL}/api/meetings/${id}/stt-chunk/`,
       finalize: (id: string | number) => `${API_URL}/api/meetings/${id}/finalize/`,
-      ws: (id: string | number) => `${WS_BASE}/api/meetings/${id}/stt-stream/`,
+      ws: (id: string | number) => `${WS_BASE}/api/meetings/${id}/stt-stream/?persist=true`,
     },
     minutes: {
       live: (id: string | number) => `${API_URL}/api/meetings/${id}/minutes/live/`,
