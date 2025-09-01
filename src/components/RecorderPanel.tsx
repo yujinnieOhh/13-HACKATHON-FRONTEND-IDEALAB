@@ -11,6 +11,8 @@ export type RecorderResult = {
   audioUrl: string;
   transcript: string;
   summary: string;
+  /** 사용자가 왼쪽 메모장에 적은 메모(줄바꿈 포함) */
+  notes?: string;
 };
 
 type RecStatus = "rec" | "pause" | "processing";
@@ -29,29 +31,52 @@ declare global {
  * -----------------------------------------------------*/
 type AnyJson = Record<string, any>;
 
+function toOneBlockText(v: any): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return v.map(toOneBlockText).filter(Boolean).join("\n");
+  if (typeof v === "object") {
+    // 흔한 키 우선
+    const cand =
+      v.overall_summary ??
+      v.summary ??
+      v.minutes ??
+      v.text ??
+      v.content ??
+      v.description ??
+      v.body ??
+      null;
+    if (cand != null) return toOneBlockText(cand);
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
 function pickOverallSummary(j: AnyJson): string {
-  // 대표 요약 텍스트 후보
-  return (
+  return toOneBlockText(
     j?.overall_summary ??
-    j?.summary ??
-    j?.minutes ??
-    j?.text ??
-    j?.content ??
-    j?.result?.overall_summary ??
-    j?.result?.summary ??
-    ""
+      j?.summary ??
+      j?.minutes ??
+      j?.text ??
+      j?.content ??
+      j?.result?.overall_summary ??
+      j?.result?.summary ??
+      ""
   );
 }
 
 function pickTopics(j: AnyJson): string[] {
   const raw = j?.topics;
   if (!Array.isArray(raw)) return [];
-  // 지원 포맷: [{topic, summary}] or [string]
   return raw.map((t: any) => {
     if (typeof t === "string") return `• ${t}`;
-    const head = t?.topic || t?.title || "";
-    const tail = t?.summary || t?.desc || "";
-    return `• ${head}${tail ? ` — ${tail}` : ""}`;
+    const head = toOneBlockText(t?.topic ?? t?.title ?? "");
+    const tail = toOneBlockText(t?.summary ?? t?.desc ?? "");
+    return `• ${head}${tail ? ` — ${tail}` : ""}`.trim();
   });
 }
 
@@ -60,18 +85,21 @@ function pickActionItems(j: AnyJson): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((a: any) => {
     if (typeof a === "string") return `- ${a}`;
-    return `- ${a?.text ?? a?.title ?? ""}`;
+    return `- ${toOneBlockText(a?.text ?? a?.title ?? a)}`;
   });
 }
 
 function composeSummaryText(j: AnyJson): string {
+  // j 자체가 문자열인 백엔드도 대비
+  const jText = typeof j === "string" ? j : null;
+
   const lines: string[] = [];
-  const overall = pickOverallSummary(j);
-  if (overall) lines.push(overall.trim());
+  const overall = jText ?? pickOverallSummary(j);
+  if (overall && typeof overall === "string") lines.push(overall.trim());
 
   const topics = pickTopics(j);
   if (topics.length) {
-    if (lines.length) lines.push(""); // 구분 빈 줄
+    if (lines.length) lines.push("");
     lines.push("Topics:");
     lines.push(...topics);
   }
@@ -83,12 +111,11 @@ function composeSummaryText(j: AnyJson): string {
     lines.push(...actions);
   }
 
-  // 다른 필드가 하나도 없을 때 대비
   return (lines.join("\n") || "").trim();
 }
 
 export default function RecorderPanel({
-  meetingId, // 숫자 아닌 값이 오더라도 내부에서 가드
+  meetingId,
   onClose,
   onFinish,
 }: {
@@ -100,6 +127,9 @@ export default function RecorderPanel({
   const [partial, setPartial] = useState("");
   const [finals, setFinals] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+
+  // 🔵 메모장 상태
+  const [memoText, setMemoText] = useState("");
 
   // 🔵 3분 라이브 요약 상태
   const [liveLoading, setLiveLoading] = useState(false);
@@ -123,7 +153,7 @@ export default function RecorderPanel({
 
   /* ====================== 서버 전송 ====================== */
   async function postChunk(text: string, start_ms: number, end_ms: number) {
-    if (!canCallApi) return; // 🛑 숫자 meetingId 준비 전이면 API 호출하지 않음
+    if (!canCallApi) return;
     try {
       const res = await fetch(ENDPOINTS.meetings.stt.chunk(numericMeetingId!), {
         method: "POST",
@@ -148,6 +178,7 @@ export default function RecorderPanel({
         audioUrl: "",
         transcript: finals.join("\n"),
         summary: localSummary,
+        notes: memoText,
       });
       setSummary(localSummary);
       return;
@@ -164,17 +195,14 @@ export default function RecorderPanel({
         console.warn("[finalize] http error", res.status, j);
       }
 
-      // ✅ 어떤 키로 와도 요약이 보이게 파싱
       const finalSummary = composeSummaryText(j) || summary || "";
-      const transcript =
-        j?.transcript ||
-        j?.text ||
-        finals.join("\n");
+      const transcript = toOneBlockText(j?.transcript ?? j?.text ?? finals.join("\n"));
 
       onFinish({
-        audioUrl: j?.audioUrl || "",
+        audioUrl: toOneBlockText(j?.audioUrl) || "",
         transcript,
         summary: finalSummary,
+        notes: memoText,
       });
       setSummary(finalSummary);
     } catch (e) {
@@ -183,6 +211,7 @@ export default function RecorderPanel({
         audioUrl: "",
         transcript: finals.join("\n"),
         summary: summary || "",
+        notes: memoText,
       });
     }
   }
@@ -238,11 +267,7 @@ export default function RecorderPanel({
         setStatus("pause");
         return;
       }
-      if (
-        runningRef.current &&
-        (e.error === "aborted" || e.error === "no-speech" || e.error === "audio-capture")
-      ) {
-        // 무음/일시적 끊김은 자동 재시작
+      if (runningRef.current && (e.error === "aborted" || e.error === "no-speech" || e.error === "audio-capture")) {
         setTimeout(() => {
           try { rec.start(); } catch {}
         }, 500);
@@ -265,7 +290,7 @@ export default function RecorderPanel({
 
   /* ====================== 3분 라이브 요약 ====================== */
   const fetchLiveMinutes = async () => {
-    if (!canCallApi) return; // meetingId 없을 때는 폴링 자체를 하지 않음
+    if (!canCallApi) return;
     setLiveLoading(true);
     try {
       const r = await fetch(ENDPOINTS.meetings.minutes.live(numericMeetingId!), {
@@ -282,7 +307,6 @@ export default function RecorderPanel({
         return;
       }
 
-      // ✅ 다양한 키를 한 줄 문자열로 합성
       const text = composeSummaryText(j);
 
       if (text) {
@@ -290,7 +314,7 @@ export default function RecorderPanel({
         setLiveUpdatedAt(Date.now());
         setLiveHistory((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.text.trim() === text.trim()) return prev; // 중복 방지
+          if (last && last.text.trim() === text.trim()) return prev;
           return [...prev, { ts: Date.now(), text }];
         });
       }
@@ -306,9 +330,8 @@ export default function RecorderPanel({
 
   const startLivePolling = () => {
     stopLivePolling();
-    if (!canCallApi) return; // 숫자 ID 없으면 시작하지 않음
+    if (!canCallApi) return;
     fetchLiveMinutes(); // 즉시 1회
-    // ⬇️ 기본 3분. 데모 중 빠르게 보고 싶으면 30초로 잠깐 낮춰도 됨.
     livePollRef.current = setInterval(fetchLiveMinutes, 3 * 60 * 1000);
   };
   const stopLivePolling = () => {
@@ -323,19 +346,16 @@ export default function RecorderPanel({
     let cancelled = false;
 
     (async () => {
-      // meetingId가 아직 숫자가 아니면 안내하고 아무 것도 시작하지 않음
       if (!canCallApi) {
         setStatus("pause");
         return;
       }
 
       try {
-        // 버튼으로 열렸을 때: 권한 프롬프트 먼저
         const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
         tmp.getTracks().forEach((t) => t.stop());
         if (cancelled) return;
 
-        // 권한 OK → 인식 + 라이브 요약 폴링
         startRecognition();
         startLivePolling();
       } catch {
@@ -388,12 +408,10 @@ export default function RecorderPanel({
   };
 
   /* ====================== UI ====================== */
-  const lastUpdatedText =
-    liveUpdatedAt ? new Date(liveUpdatedAt).toLocaleTimeString() : "대기 중";
+  const lastUpdatedText = liveUpdatedAt ? new Date(liveUpdatedAt).toLocaleTimeString() : "대기 중";
 
   return (
     <div className="px-6 pt-3">
-      {/* meetingId 준비 안 됐을 때 경고 리본 */}
       {!canCallApi && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-sm">
           회의 ID가 아직 준비되지 않아 녹음/요약 기능이 비활성화되어 있습니다. 잠시 후 다시 시도해 주세요.
@@ -462,6 +480,8 @@ export default function RecorderPanel({
                 className="w-full h-60 rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3
                            text-[14px] text-slate-700 placeholder:text-slate-400
                            outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-300 transition"
+                value={memoText}
+                onChange={(e) => setMemoText(e.target.value)}
               />
               <p className="mt-2 text-[12px] text-slate-400">
                 Enter 줄바꿈, Ctrl+Enter 문단 구분
@@ -484,7 +504,6 @@ export default function RecorderPanel({
               </div>
             </div>
             <div className="px-5 pb-5">
-              {/* 로딩 인디케이터 */}
               {liveLoading && (
                 <div className="mb-3 inline-flex items-center gap-2 text-[13px] text-slate-500">
                   <span className="inline-block h-4 w-4 rounded-full border-2 border-slate-300 border-t-transparent animate-spin" />
@@ -492,7 +511,6 @@ export default function RecorderPanel({
                 </div>
               )}
 
-              {/* 최신 요약 */}
               <div className="mt-1 text-[14px] text-slate-700 min-h-[64px] whitespace-pre-wrap">
                 {liveLatest
                   ? liveLatest
@@ -506,7 +524,6 @@ export default function RecorderPanel({
                   : <span className="text-slate-400">첫 요약 대기 중…</span>}
               </div>
 
-              {/* 이전 요약 히스토리 */}
               {liveHistory.length > 1 && (
                 <details className="mt-4">
                   <summary className="cursor-pointer text-[13px] text-slate-500">
