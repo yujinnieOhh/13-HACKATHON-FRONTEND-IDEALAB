@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# IDEALab (아이디어랩)
 
-## Getting Started
+> 창업자를 위한 AI 기반 실시간 상권 분석 및 협업 툴 (멋쟁이사자처럼 중앙 해커톤)
 
-First, run the development server:
+<br />
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📌 주요 기능
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+* **AI 실시간 상권 분석:**
+    * 회의 중 사용자가 '지역명'을 언급하면, 해당 지역의 핵심 상권 분석 데이터를 실시간으로 제공.
+* **AI 최종 레포트 (핵심 기능):**
+    * 사용자가 선택한 '구'와 '업종'에 따라 AI가 분석한 상권 데이터를 종합 리포트 형식으로 제공.
+* **지도 시각화 (Kakao Maps):**
+    * `react-kakao-maps-sdk`를 활용, 선택된 '구'의 행정 경계(`GeoJSON`)를 지도 위에 `Polygon` 오버레이로 렌더링.
+* **데이터 차트 (Chart.js):**
+    * AI가 분석한 데이터를 `react-chartjs-2`를 활용해 4가지 차트로 시각화.
+        * **Bar Chart (2종):** 요일별 매출 현황, 연령대별 매출 현황
+        * **Line Chart (1종):** 시간대별 매출 현황
+        * **Pie Chart (1종):** 성별 매출 현황
+* **동적 컨트롤:**
+    * **지역 선택:** `GuSelect` 컴포넌트를 통해 사용자가 분석할 '구'를 선택.
+    * **업종 선택:** `CategorySelector` 컴포넌트를 통해 '음식점업', '도소매업' 등 대분류/소분류 업종 필터링.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+<br />
 
-## Learn More
+## 🛠️ 기술 스택
 
-To learn more about Next.js, take a look at the following resources:
+* **Frontend:** Next.js (App Router), React, TypeScript
+* **Styling:** Tailwind CSS
+* **State Management:** Zustand (`useInsightStore`)
+* **API Client:** `fetch` API (Native)
+* **Data Visualization:** `react-chartjs-2`, `react-kakao-maps-sdk`
+* **Deployment:** Vercel
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+<br />
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 💡 핵심 트러블슈팅 및 설계
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+* **지도 데이터 파싱 및 렌더링:**
+    * **문제:** `react-kakao-maps-sdk`는 `Polygon` 경로로 단순 `lat/lng` 배열만 지원하나, 행정 경계 데이터는 복잡한 `GeoJSON` (feat. `MultiPolygon`) 형식.
+    * **해결:** `SIG.json` 파일을 `fetch`로 비동기 로드한 후, `extractRings` 유틸 함수를 직접 구현하여 `MultiPolygon`을 포함한 `GeoJSON`의 `geometry` 데이터에서 `Polygon`이 인식할 수 있는 외곽 링(`[lng, lat]`) 배열만 추출하여 지도에 성공적으로 렌더링.
+* **재사용 가능한 차트 컴포넌트 설계:**
+    * **문제:** 4종의 차트(Bar, Line, Pie)가 각각 다른 API 엔드포인트와 데이터 형식을 가짐.
+    * **해결:** `BarChart`, `LineChart` 등 범용 차트 컴포넌트를 설계. `props`로 `data`를 직접 주입받거나 `endpoint` URL만 받아 컴포넌트 내부에서 `useEffect`로 데이터를 직접 `fetch`하는 두 가지 모드를 모두 지원. 또한, `makeDemo` 폴백(fallback) 함수를 구현하여 API 호출 실패 시에도 데모 데이터로 UI가 깨지지 않도록 안정성 확보.
+* **Zustand를 통한 전역 상태 관리:**
+    * **문제:** `GuSelect` (지역 선택기), `MapsGraphs` (지도), `RightTabEmbed` (리포트 본문) 등 여러 컴포넌트가 '현재 선택된 구(`selectedGu`)' 상태를 공유해야 함.
+    * **해결:** `React Context` 대신 가볍고 보일러플레이트가 적은 `Zustand`를 도입. `useInsightStore` 스토어를 생성하여, 사용자가 `GuSelect`에서 '구'를 변경하면 `setRegion` 액션이 스토어 상태를 업데이트하고, 이 스토어를 구독하는 모든 컴포넌트(지도, 차트)가 리렌더링 없이 즉각적으로 동기화되도록 설계.
